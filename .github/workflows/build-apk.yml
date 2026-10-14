@@ -1,6 +1,6 @@
 name: Build Ethiopian Dama APK
 
-# Builds the release (and debug) APK automatically on every push.
+# Builds the release APK automatically on every push.
 # No binary Gradle wrapper needs to be committed: the Android platform
 # shell is generated on the runner with `flutter create .` from the pure
 # Dart sources in this repository (lib/main.dart + pubspec.yaml).
@@ -14,11 +14,18 @@ on:
 
 jobs:
   build:
-    name: Build Release & Debug APK
+    name: Build Release APK
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # The runner image ships several big toolchains this build never uses;
+      # removing them keeps the disk comfortably below the 14 GB limit.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup || true
+          df -h /
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -120,19 +127,9 @@ jobs:
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Build debug APK
-        run: flutter build apk --debug
-
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
           name: ethiopian-dama-pro-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: ethiopian-dama-pro-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error

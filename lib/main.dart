@@ -37,6 +37,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // ----------------------------------------------------------------------------
@@ -84,8 +85,8 @@ class S {
       AppLanguage.english: 'The classic game of mind & strategy',
     },
     'version': {
-      AppLanguage.amharic: 'ቅጂ 1.0.0 • ከመስመር ውጭ (offline) • ያለ ማስታወሻ',
-      AppLanguage.english: 'v1.0.0 • fully offline • no ads',
+      AppLanguage.amharic: 'ቅጂ 1.1.0 • ከመስመር ውጭ (offline) • ያለ ማስታወሻ',
+      AppLanguage.english: 'v1.1.0 • fully offline • no ads',
     },
     'vsAi': {
       AppLanguage.amharic: 'ከኮምፒውተር ጋር',
@@ -199,6 +200,14 @@ class S {
     'hapticsSub': {
       AppLanguage.amharic: 'በየእርምጃው መታጠፍ/መምታት ብርቭት',
       AppLanguage.english: 'Vibration on moves and captures',
+    },
+    'sound': {
+      AppLanguage.amharic: 'የድምጽ ውጤቶች',
+      AppLanguage.english: 'Sound effects',
+    },
+    'soundSub': {
+      AppLanguage.amharic: 'ሲተጫወት፣ ሲበላ እና ሲያሸንፍ ድምጽ ያጫውታል',
+      AppLanguage.english: 'Sounds on moves, captures and wins',
     },
     'language': {
       AppLanguage.amharic: 'ቋንቋ',
@@ -354,6 +363,10 @@ class S {
     'yifutaWaiting': {
       AppLanguage.amharic: 'ተቃዋሚው ይፉታ እያሰበ ነው…',
       AppLanguage.english: 'Opponent is deciding on Yifuta…',
+    },
+    'yifutaHint': {
+      AppLanguage.amharic: 'በቀዩ ብርሃን የተመለከተው ጠጠር ነው የሚቃጠለው 🔥',
+      AppLanguage.english: 'The red-glowing piece will be burned 🔥',
     },
     'forcedBanner': {
       AppLanguage.amharic: 'በግድ አስበላ! መብላት አለብህ።',
@@ -628,12 +641,14 @@ class GameOptions {
   YifutaMode yifuta;
   Difficulty difficulty;
   bool hapticsOn;
+  bool soundOn;
 
   GameOptions({
     this.pawnCapture = PawnCaptureMode.fourWay,
     this.yifuta = YifutaMode.traditional,
     this.difficulty = Difficulty.medium,
     this.hapticsOn = true,
+    this.soundOn = true,
   });
 
   GameOptions copy() => GameOptions(
@@ -641,6 +656,7 @@ class GameOptions {
         yifuta: yifuta,
         difficulty: difficulty,
         hapticsOn: hapticsOn,
+        soundOn: soundOn,
       );
 
   Map<String, dynamic> toNet() => <String, dynamic>{
@@ -1381,6 +1397,7 @@ class AppPrefs {
         difficulty:
             Difficulty.values[_idx(_prefs.getInt('dama.difficulty'), 2)],
         hapticsOn: _prefs.getBool('dama.haptics') ?? true,
+        soundOn: _prefs.getBool('dama.sound') ?? true,
       );
 
   static Future<void> saveOptions(GameOptions o) async {
@@ -1388,12 +1405,52 @@ class AppPrefs {
     await _prefs.setInt('dama.yifuta', o.yifuta.index);
     await _prefs.setInt('dama.difficulty', o.difficulty.index);
     await _prefs.setBool('dama.haptics', o.hapticsOn);
+    await _prefs.setBool('dama.sound', o.soundOn);
   }
 
   static Future<void> saveLanguage(AppLanguage l) async {
     S.lang = l;
     languageNotifier.value = l;
     await _prefs.setInt('dama.lang', l.index);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Sound effects (tiny bundled WAV assets, played through audioplayers)
+// ----------------------------------------------------------------------------
+
+/// All effects are short 22050 Hz mono WAVs shipped under assets/sounds/.
+/// A single low-latency [AudioPlayer] is reused so rapid multi-jump sounds
+/// stay cheap. Sound can be toggled from the settings screen.
+class Sfx {
+  static final AudioPlayer _player = AudioPlayer();
+  static bool _warmed = false;
+
+  /// Pre-loads the audio engine so the first in-game sound is instant.
+  /// Silently ignored when audio is unavailable.
+  static Future<void> warmup() async {
+    if (_warmed) return;
+    _warmed = true;
+    try {
+      await _player.setPlayerMode(PlayerMode.lowLatency);
+      await _player.play(AssetSource('sounds/select.wav'), volume: 0.0);
+    } catch (_) {
+      // Audio not available — the game stays perfectly playable without it.
+    }
+  }
+
+  /// Fire-and-forget playback. [name] is a file under assets/sounds/
+  /// without extension: 'move', 'capture', 'promote', 'yifuta', 'win',
+  /// 'lose', 'select'. All errors are swallowed asynchronously so audio
+  /// can never crash or freeze gameplay.
+  static void play(String name, {double volume = 1.0}) {
+    Future<void>(() async {
+      try {
+        await _player.play(AssetSource('sounds/$name.wav'), volume: volume);
+      } catch (_) {
+        // Never let audio problems affect gameplay.
+      }
+    });
   }
 }
 
@@ -1530,6 +1587,7 @@ class NetLink {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppPrefs.load();
+  unawaited(Sfx.warmup());
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
@@ -2134,6 +2192,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _changed();
             },
           ),
+          SwitchListTile(
+            value: opt.soundOn,
+            activeColor: const Color(0xFFFFC107),
+            title: Text(S.t('sound')),
+            subtitle: Text(S.t('soundSub')),
+            onChanged: (v) {
+              opt.soundOn = v;
+              if (v) Sfx.play('select');
+              _changed();
+            },
+          ),
           const SizedBox(height: 24),
         ],
       ),
@@ -2577,6 +2646,16 @@ class _Pending {
   _Pending(this.from, this.steps, this.captured);
 }
 
+/// One in-flight piece animation: the piece visually glides from [fromSq]
+/// to [toSq] above the grid while the grid below still shows the pre-step
+/// position, so both players can follow exactly what happened.
+class _FlyAnim {
+  final int piece;
+  final int fromSq;
+  final int toSq;
+  const _FlyAnim(this.piece, this.fromSq, this.toSq);
+}
+
 class _YifutaContext {
   final List<int> preBoard;
   final DamaMove quietMove;
@@ -2608,6 +2687,16 @@ class _GameScreenState extends State<GameScreen>
   List<_StepOption> _steps = const <_StepOption>[];
   _Pending? _pending;
   DamaMove? _lastMove;
+
+  // ---- Move animation state ----
+  /// Board copy the grid renders from. During a flight it holds the
+  /// pre-step position so the moving piece appears once (in the overlay)
+  /// and captured pieces stay visible until the landing.
+  List<int> _viewBoard = const <int>[];
+  _FlyAnim? _fly;
+  bool _animating = false;
+  int _animTick = 0;
+  int _animToken = 0;
 
   bool _aiThinking = false;
   int _aiToken = 0;
@@ -2645,6 +2734,7 @@ class _GameScreenState extends State<GameScreen>
     super.initState();
     opt = widget.options.copy();
     board = DamaEngine.initialBoard();
+    _viewBoard = board;
     _pushSnapshot();
     if (_isHotspot) {
       final net = widget.net;
@@ -2663,11 +2753,79 @@ class _GameScreenState extends State<GameScreen>
 
   @override
   void dispose() {
+    _animToken++; // cancel any in-flight animation callback
     _aiToken++;
     _netSub?.cancel();
     widget.net?.dispose();
     _pulse.dispose();
     super.dispose();
+  }
+
+  // ---- Move animation -------------------------------------------------------
+
+  void _sfxPlay(String name) {
+    if (opt.soundOn) Sfx.play(name);
+  }
+
+  /// Instantly drop any pending animation and show the real board.
+  void _cancelAnimation() {
+    _animToken++;
+    _fly = null;
+    _animating = false;
+    _viewBoard = List<int>.from(board);
+  }
+
+  /// Animate a single step: [viewBefore] is the board state before the step
+  /// (the grid keeps showing it while the piece glides above it).
+  void _startFlight(List<int> viewBefore, int piece, int from, int to) {
+    _animToken++;
+    final token = _animToken;
+    _viewBoard = viewBefore;
+    _fly = _FlyAnim(piece, from, to);
+    _animating = true;
+    _animTick++;
+    setState(() {});
+    Future.delayed(const Duration(milliseconds: 240), () {
+      if (!mounted || token != _animToken) return;
+      _fly = null;
+      _animating = false;
+      _viewBoard = List<int>.from(board);
+      setState(() {});
+    });
+  }
+
+  /// Replays a full move step by step (AI and remote moves) so the opponent
+  /// can follow every jump. The logical board is already final; only the
+  /// rendering lags one step at a time.
+  Future<void> _animateMove(DamaMove m, List<int> preBoard) async {
+    _animToken++;
+    final token = _animToken;
+    _animating = true;
+    List<int> view = preBoard;
+    int cur = m.from;
+    for (int i = 0; i < m.steps.length; i++) {
+      final to = m.steps[i];
+      final victimSq = i < m.captured.length ? m.captured[i] : -1;
+      _viewBoard = view;
+      _fly = _FlyAnim(view[cur], cur, to);
+      _animTick++;
+      setState(() {});
+      _sfxPlay(victimSq >= 0 ? 'capture' : 'move');
+      if (victimSq >= 0) _haptic(heavy: true);
+      await Future<void>.delayed(const Duration(milliseconds: 270));
+      if (!mounted || token != _animToken) return;
+      final next = List<int>.from(view);
+      next[cur] = kEmpty;
+      if (victimSq >= 0) next[victimSq] = kEmpty;
+      next[to] = view[cur];
+      view = next;
+      cur = to;
+    }
+    if (m.promotes) _sfxPlay('promote');
+    _fly = null;
+    _animating = false;
+    _viewBoard = List<int>.from(board);
+    setState(() {});
   }
 
   // ---- Small helpers --------------------------------------------------------
@@ -2735,6 +2893,7 @@ class _GameScreenState extends State<GameScreen>
 
   void _restoreSnapshot(_Snapshot s) {
     board = List<int>.from(s.board);
+    _cancelAnimation();
     whiteToMove = s.whiteToMove;
     capturedByWhite = s.capturedByWhite;
     capturedByBlack = s.capturedByBlack;
@@ -2832,10 +2991,22 @@ class _GameScreenState extends State<GameScreen>
     _overSub = sub;
     _aiThinking = false;
     _aiToken++;
+    _cancelAnimation();
     _selected = null;
     _steps = const <_StepOption>[];
     _pending = null;
     _haptic(heavy: true);
+    if (title != S.t('draw') && title != S.t('opponentLeft')) {
+      bool localWon;
+      if (widget.mode == GameMode.vsAi) {
+        localWon = title == _winnerTitle(true);
+      } else if (_isHotspot) {
+        localWon = title == _winnerTitle(_iAmWhite);
+      } else {
+        localWon = true; // pass & play: someone at this phone won
+      }
+      _sfxPlay(localWon ? 'win' : 'lose');
+    }
     setState(() {});
     Future.delayed(const Duration(milliseconds: 400), () {
       if (mounted && !_gameOverShown) {
@@ -2849,6 +3020,7 @@ class _GameScreenState extends State<GameScreen>
 
   void _onTapSquare(int sq) {
     if (_gameOver || _netDead) return;
+    if (_animating) return; // a piece is still flying
     if (_yifCtx != null || _yifutaAwaitRemote || _aiThinking) return;
     if (_isHotspot && !_netHandshakeDone) return;
     if (!_isMyTurn()) return;
@@ -2889,6 +3061,7 @@ class _GameScreenState extends State<GameScreen>
     }
     _selected = sq;
     _steps = steps;
+    _sfxPlay('select');
     _haptic();
     setState(() {});
   }
@@ -2978,9 +3151,12 @@ class _GameScreenState extends State<GameScreen>
 
     _haptic(heavy: true);
     final piece = board[from];
+    final viewBefore = List<int>.from(board);
     board[from] = kEmpty;
     board[step.victim!] = kEmpty;
     board[step.to] = piece;
+    _sfxPlay('capture');
+    _startFlight(viewBefore, piece, from, step.to);
 
     if (_pending == null) {
       _pending = _Pending(from, <int>[step.to], <int>[step.victim!]);
@@ -2992,6 +3168,7 @@ class _GameScreenState extends State<GameScreen>
     if (step.promotes) {
       // Promotion during a capture ends the turn immediately.
       board[step.to] = isWhitePiece(piece) ? kWKing : kBKing;
+      _sfxPlay('promote');
       final m = DamaMove(
         _pending!.from,
         List<int>.of(_pending!.steps),
@@ -3043,7 +3220,10 @@ class _GameScreenState extends State<GameScreen>
   void _attemptQuietMove(int from, int to, bool promotes) {
     final m = DamaMove(from, <int>[to], const <int>[], promotes);
     final preBoard = List<int>.from(board);
+    final piece = board[from];
     DamaEngine.applyMove(board, m);
+    _sfxPlay('move');
+    _startFlight(preBoard, piece, from, to);
     _lastMove = m;
     _selected = null;
     _steps = const <_StepOption>[];
@@ -3114,19 +3294,22 @@ class _GameScreenState extends State<GameScreen>
     if (ctx == null) return;
     final moverName = _moverLabel(ctx.moverWhite);
     final prompt = S.t('yifutaPrompt').replaceAll('{p}', moverName);
-    final action = await showDialog<String>(
+    // Bottom sheet instead of a full dialog: the board (and the red-glowing
+    // offender piece) stays visible above while the decision is made.
+    final action = await showModalBottomSheet<String>(
       context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) {
+      backgroundColor: const Color(0xFF1E1E1E),
+      isDismissible: false,
+      enableDrag: false,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetCtx) {
         return PopScope(
           canPop: false,
-          child: Dialog(
-            backgroundColor: const Color(0xFF1E1E1E),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-            ),
+          child: SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(22),
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3140,7 +3323,7 @@ class _GameScreenState extends State<GameScreen>
                       fontWeight: FontWeight.w900,
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   Text(
                     prompt,
                     textAlign: TextAlign.center,
@@ -3150,27 +3333,49 @@ class _GameScreenState extends State<GameScreen>
                       height: 1.4,
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.local_fire_department,
+                        color: const Color(0xFFFF1744)
+                            .withValues(alpha: 0.9),
+                        size: 15,
+                      ),
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          S.t('yifutaHint'),
+                          style: TextStyle(
+                            color: const Color(0xFFFF8A80),
+                            fontSize: 11.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
                   _yifutaButton(
-                    context: dialogCtx,
+                    context: sheetCtx,
                     action: 'burn',
                     color: const Color(0xFFD32F2F),
                     title: S.t('yifutaBurn'),
                     subtitle: S.t('yifutaBurnSub'),
                     icon: Icons.local_fire_department,
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   _yifutaButton(
-                    context: dialogCtx,
+                    context: sheetCtx,
                     action: 'force',
                     color: const Color(0xFFFF8F00),
                     title: S.t('yifutaForce'),
                     subtitle: S.t('yifutaForceSub'),
                     icon: Icons.replay,
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   _yifutaButton(
-                    context: dialogCtx,
+                    context: sheetCtx,
                     action: 'ignore',
                     color: const Color(0xFF37474F),
                     title: S.t('yifutaIgnore'),
@@ -3279,6 +3484,7 @@ class _GameScreenState extends State<GameScreen>
     if (ctx == null || _gameOver) return;
     _yifCtx = null;
     _yifutaAwaitRemote = false;
+    _cancelAnimation();
 
     if (action == 'burn') {
       if (ctx.offender >= 0 && ctx.offender < 64) {
@@ -3291,12 +3497,14 @@ class _GameScreenState extends State<GameScreen>
       }
       _lastMove = ctx.quietMove;
       _quietPlies += 1;
+      _sfxPlay('yifuta');
       _haptic(heavy: true);
       _finishTurnCommon();
     } else if (action == 'force') {
       // Revert to the exact pre-move state and lock the mover into the
       // capture; the glowing red highlights mark the forced pieces.
       board = List<int>.from(ctx.preBoard);
+      _cancelAnimation();
       _forceLock = true;
       _forcedCapturers =
           DamaEngine.capturers(board, ctx.moverWhite, opt.pawnCapture);
@@ -3359,17 +3567,22 @@ class _GameScreenState extends State<GameScreen>
           return;
         }
         if (m.isCapture) {
+          final preBoard = List<int>.from(board);
           DamaEngine.applyMove(board, m);
           _lastMove = m;
           capturedByBlack += m.captured.length;
           _quietPlies = 0;
-          _haptic(heavy: true);
           if (m.promotes) _toast(S.t('promotedToast'));
+          await _animateMove(m, preBoard);
+          if (!mounted || token != _aiToken) return;
+          _haptic(heavy: true);
           _finishTurnCommon();
         } else {
           final preBoard = List<int>.from(board);
           DamaEngine.applyMove(board, m);
           _lastMove = m;
+          await _animateMove(m, preBoard);
+          if (!mounted || token != _aiToken) return;
           _handleQuietDone(m, preBoard, false, moveOriginLocal: false);
         }
       } catch (e) {
@@ -3385,6 +3598,7 @@ class _GameScreenState extends State<GameScreen>
 
   void _resetBoard() {
     board = DamaEngine.initialBoard();
+    _cancelAnimation();
     whiteToMove = true;
     capturedByWhite = 0;
     capturedByBlack = 0;
@@ -3534,7 +3748,7 @@ class _GameScreenState extends State<GameScreen>
     }
   }
 
-  void _onRemoteMove(Map<String, dynamic> msg) {
+  Future<void> _onRemoteMove(Map<String, dynamic> msg) async {
     if (_gameOver || _netDead) return;
     if (_yifCtx != null || _yifutaAwaitRemote) return;
     final moverWhite = !_iAmWhite;
@@ -3550,6 +3764,7 @@ class _GameScreenState extends State<GameScreen>
           forceCaptureOnly: _forceLock);
       if (!legal.any((lm) => lm.sameAs(m))) return; // invalid — ignore
       if (m.isCapture) {
+        final preBoard = List<int>.from(board);
         DamaEngine.applyMove(board, m);
         _lastMove = m;
         if (moverWhite) {
@@ -3558,13 +3773,17 @@ class _GameScreenState extends State<GameScreen>
           capturedByBlack += m.captured.length;
         }
         _quietPlies = 0;
-        _haptic(heavy: true);
         if (m.promotes) _toast(S.t('promotedToast'));
+        await _animateMove(m, preBoard);
+        if (!mounted) return;
+        _haptic(heavy: true);
         _finishTurnCommon();
       } else {
         final preBoard = List<int>.from(board);
         DamaEngine.applyMove(board, m);
         _lastMove = m;
+        await _animateMove(m, preBoard);
+        if (!mounted) return;
         _handleQuietDone(m, preBoard, moverWhite, moveOriginLocal: false);
       }
     } catch (_) {
@@ -3633,7 +3852,7 @@ class _GameScreenState extends State<GameScreen>
 
   @override
   Widget build(BuildContext context) {
-    final boardMaxWidth = MediaQuery.of(context).size.width - 20;
+    final boardMaxWidth = MediaQuery.of(context).size.width - 8;
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       appBar: AppBar(
@@ -3676,7 +3895,7 @@ class _GameScreenState extends State<GameScreen>
                 child: ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: boardMaxWidth),
                   child: Padding(
-                    padding: const EdgeInsets.all(10),
+                    padding: const EdgeInsets.all(4),
                     child: AspectRatio(aspectRatio: 1, child: _boardWidget()),
                   ),
                 ),
@@ -3691,19 +3910,19 @@ class _GameScreenState extends State<GameScreen>
 
   Widget _statusPanel() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
       child: Column(
         children: [
           Row(
             children: [
               _miniPiece(whiteToMove),
-              const SizedBox(width: 10),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   _turnLabel(),
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 15,
+                    fontSize: 14,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -3715,7 +3934,7 @@ class _GameScreenState extends State<GameScreen>
                 style: const TextStyle(
                     color: Colors.white, fontWeight: FontWeight.bold),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               _miniPiece(false),
               const SizedBox(width: 4),
               Text(
@@ -3725,18 +3944,9 @@ class _GameScreenState extends State<GameScreen>
               ),
             ],
           ),
-          const SizedBox(height: 2),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Text(
-              S.t('remaining'),
-              style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.4), fontSize: 10),
-            ),
-          ),
           if (_aiThinking)
             const Padding(
-              padding: EdgeInsets.only(top: 6),
+              padding: EdgeInsets.only(top: 4),
               child: LinearProgressIndicator(
                 color: Color(0xFFFFC107),
                 backgroundColor: Color(0xFF262626),
@@ -3744,7 +3954,7 @@ class _GameScreenState extends State<GameScreen>
             ),
           if (_forceLock && !_gameOver)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.only(top: 6),
               child: _pulseBanner(
                 color: const Color(0xFFB71C1C),
                 icon: Icons.local_fire_department,
@@ -3753,7 +3963,7 @@ class _GameScreenState extends State<GameScreen>
             ),
           if (_yifutaAwaitRemote)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.only(top: 6),
               child: _pulseBanner(
                 color: const Color(0xFF8D6E63),
                 icon: Icons.hourglass_top,
@@ -3762,14 +3972,14 @@ class _GameScreenState extends State<GameScreen>
             ),
           if (_netDead)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.only(top: 6),
               child: _staticBanner(
                 color: const Color(0xFF7B1FA2),
                 icon: Icons.wifi_off,
                 text: S.t('opponentLeft'),
               ),
             ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
         ],
       ),
     );
@@ -3874,20 +4084,69 @@ class _GameScreenState extends State<GameScreen>
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF3E2723),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF2B1B17), width: 5),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF2B1B17), width: 3),
         boxShadow: const [
           BoxShadow(
-              color: Colors.black54, blurRadius: 12, offset: Offset(0, 5)),
+              color: Colors.black54, blurRadius: 8, offset: Offset(0, 4)),
         ],
       ),
-      padding: const EdgeInsets.all(3),
+      padding: const EdgeInsets.all(2),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         child: AnimatedRotation(
           turns: _flipped ? 0.5 : 0.0,
           duration: const Duration(milliseconds: 350),
-          child: _boardGrid(),
+          child: Stack(
+            children: [
+              _boardGrid(),
+              if (_fly != null) _flyOverlay(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The flying piece glides above the grid while the grid below still
+  /// shows the pre-move position — every move stays readable at a glance.
+  Widget _flyOverlay() {
+    final f = _fly!;
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final cell = constraints.biggest.width / 8;
+            final fromX = colOf(f.fromSq) * cell;
+            final fromY = rowOf(f.fromSq) * cell;
+            final toX = colOf(f.toSq) * cell;
+            final toY = rowOf(f.toSq) * cell;
+            return TweenAnimationBuilder<double>(
+              key: ValueKey<int>(_animTick),
+              tween: Tween<double>(begin: 0.0, end: 1.0),
+              duration: const Duration(milliseconds: 230),
+              curve: Curves.easeInOut,
+              builder: (context, t, child) {
+                final x = fromX + (toX - fromX) * t;
+                final y = fromY + (toY - fromY) * t;
+                // Little lift arc: rises mid-flight, settles on landing.
+                final lift = 1.0 + 0.22 * sin(pi * t);
+                return Transform.translate(
+                  offset: Offset(x, y),
+                  child: Transform.scale(
+                    scale: lift,
+                    alignment: Alignment.center,
+                    child: child,
+                  ),
+                );
+              },
+              child: SizedBox(
+                width: cell,
+                height: cell,
+                child: _pieceWidget(f.piece, flying: true),
+              ),
+            );
+          },
         ),
       ),
     );
@@ -3912,7 +4171,9 @@ class _GameScreenState extends State<GameScreen>
   Widget _cell(int r, int c) {
     final sq = square(r, c);
     final dark = ((r + c) & 1) == 1;
-    final piece = board[sq];
+    var piece = _viewBoard[sq];
+    // While a piece is in flight its origin is drawn by the overlay only.
+    if (_fly != null && _fly!.fromSq == sq) piece = kEmpty;
 
     final isSel = _selected == sq;
     final destStep = _steps.cast<_StepOption?>().firstWhere(
@@ -3925,11 +4186,14 @@ class _GameScreenState extends State<GameScreen>
     final isLastFrom = _lastMove != null && _lastMove!.from == sq;
     final isLastTo = _lastMove != null && _lastMove!.to == sq;
     final isForcedCapturer = _forceLock && _forcedCapturers.contains(sq);
+    // Yifuta: the offending piece glows red while the decision is pending.
+    final isOffender = _yifCtx != null && _yifCtx!.offender == sq;
 
     final baseColor =
         dark ? const Color(0xFF5D4037) : const Color(0xFFD7CCC8);
 
     return GestureDetector(
+      key: ValueKey<String>('cell$sq'),
       behavior: HitTestBehavior.opaque,
       onTap: () => _onTapSquare(sq),
       child: Container(
@@ -3960,6 +4224,48 @@ class _GameScreenState extends State<GameScreen>
             if (piece != kEmpty)
               Positioned.fill(
                 child: _pieceWidget(piece, forcedGlow: isForcedCapturer),
+              ),
+            if (isOffender)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: AnimatedBuilder(
+                    animation: _pulse,
+                    builder: (context, _) => Container(
+                      margin: const EdgeInsets.all(1.5),
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                            color: const Color(0xFFFF1744), width: 3),
+                        borderRadius: BorderRadius.circular(6),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFFF1744).withValues(
+                                alpha: 0.30 + 0.45 * _pulse.value),
+                            blurRadius: 6 + 9 * _pulse.value,
+                            spreadRadius: 1 + 2 * _pulse.value,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (isOffender)
+              IgnorePointer(
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: const EdgeInsets.all(1),
+                    child: Icon(
+                      Icons.local_fire_department,
+                      color: const Color(0xFFFFAB40)
+                          .withValues(alpha: 0.95),
+                      size: 17,
+                      shadows: const [
+                        Shadow(color: Colors.black, blurRadius: 3),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             if (isVictim)
               Positioned.fill(
@@ -4022,7 +4328,7 @@ class _GameScreenState extends State<GameScreen>
     );
   }
 
-  Widget _pieceWidget(int piece, {bool forcedGlow = false}) {
+  Widget _pieceWidget(int piece, {bool forcedGlow = false, bool flying = false}) {
     final white = isWhitePiece(piece);
     final king = isKingPiece(piece);
     final core = Center(
@@ -4050,9 +4356,10 @@ class _GameScreenState extends State<GameScreen>
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.55),
-                blurRadius: 5,
-                offset: const Offset(0, 3),
+                color: Colors.black.withValues(
+                    alpha: flying ? 0.7 : 0.55),
+                blurRadius: flying ? 14 : 5,
+                offset: Offset(0, flying ? 8 : 3),
               ),
             ],
           ),
@@ -4097,11 +4404,11 @@ class _GameScreenState extends State<GameScreen>
 
   Widget _controlRow() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 10),
+      padding: const EdgeInsets.fromLTRB(6, 2, 6, 6),
       child: Wrap(
         alignment: WrapAlignment.spaceEvenly,
-        spacing: 10,
-        runSpacing: 6,
+        spacing: 8,
+        runSpacing: 4,
         children: [
           _CtrlButton(
             icon: Icons.undo,
@@ -4188,59 +4495,84 @@ class _GameScreenState extends State<GameScreen>
   // ---- Game over -------------------------------------------------------------
 
   Future<void> _showGameOverDialog() async {
-    await showDialog<void>(
+    await showModalBottomSheet<void>(
       context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) {
+      backgroundColor: const Color(0xFF1E1E1E),
+      isDismissible: false,
+      enableDrag: false,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (sheetCtx) {
         return PopScope(
           canPop: false,
-          child: AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-            ),
-            title: Text(
-              _overTitle ?? '',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Color(0xFFFFC107),
-                fontSize: 26,
-                fontWeight: FontWeight.w900,
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 26),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.emoji_events,
+                      color: Color(0xFFFFC107), size: 52),
+                  const SizedBox(height: 8),
+                  Text(
+                    _overTitle ?? '',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Color(0xFFFFC107),
+                      fontSize: 26,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _overSub ?? '',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.7),
+                        fontSize: 13),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.white70,
+                            side: const BorderSide(color: Color(0xFF4A4A4A)),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                          onPressed: () {
+                            Navigator.of(sheetCtx).pop();
+                            Navigator.of(context).maybePop();
+                          },
+                          child: Text(S.t('backToMenu')),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFFFC107),
+                            foregroundColor: const Color(0xFF1E1E1E),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                          onPressed: () {
+                            Navigator.of(sheetCtx).pop();
+                            if (_isHotspot) {
+                              _requestRematch();
+                            } else {
+                              _resetBoard();
+                            }
+                          },
+                          child: Text(S.t('rematch')),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.emoji_events,
-                    color: Color(0xFFFFC107), size: 54),
-                const SizedBox(height: 10),
-                Text(
-                  _overSub ?? '',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.7), fontSize: 13),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(dialogCtx).pop();
-                  Navigator.of(context).maybePop();
-                },
-                child: Text(S.t('backToMenu')),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.of(dialogCtx).pop();
-                  if (_isHotspot) {
-                    _requestRematch();
-                  } else {
-                    _resetBoard();
-                  }
-                },
-                child: Text(S.t('rematch')),
-              ),
-            ],
           ),
         );
       },

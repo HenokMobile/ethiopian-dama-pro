@@ -7,12 +7,14 @@
 ## ✨ ግብረ ባህሪያት / Features
 
 - 🎯 **Complete Ethiopian Dama rules** — 8×8 board, flying kings (ንጉሥ), mandatory multi-capture chains, mid-capture promotion
-- 🔥 **Yifuta (ይፉታ) system** — traditional huffing (burn / force re-capture / let it go) or strict forced-capture mode
+- 🔥 **Yifuta (ይፉታ) system** — traditional huffing (burn / force re-capture / let it go) or strict forced-capture mode; the offending piece glows red on the board while the decision sheet is open
+- 🎬 **Animated moves** — every piece glides from square to square (with a little lift), so both players can follow each move and multi-jump
+- 🔊 **Sound effects** — move, capture, promotion, yifuta burn, win/lose (toggle in settings)
 - 🦉 **“የዳማ አውራ” AI engine** — Minimax + alpha-beta pruning running in an Isolate (60 FPS UI): ጀማሪ / መካከለኛ / የዳማ አውራ (depth 7–8)
 - 👥 **Pass & Play** — two players on one phone with board flipping
 - 📡 **Hotspot LAN multiplayer** — pure `dart:io` TCP on port 4545, zero online dependencies; host shows its 192.168.x.x IP, friend joins
 - 🇪🇹 **አማርኛ + English** — full bilingual interface (Amharic default)
-- 🎨 Wooden board, 3D pieces, gold crowns, haptic feedback
+- 🎨 Wooden board, 3D pieces, gold crowns, haptic feedback, big board layout
 
 ## 📱 Getting the APK
 

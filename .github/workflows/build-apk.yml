@@ -47,7 +47,8 @@ jobs:
           else
             echo "android/ already present -> skipping flutter create"
           fi
-          rm -rf test || true
+          # Remove any auto-generated template test; our smoke tests stay.
+          rm -f test/widget_test.dart || true
 
       # The generated release manifest has no network permissions; the
       # hotspot multiplayer (TCP on 4545) needs them. Also set the Amharic
@@ -85,6 +86,9 @@ jobs:
 
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Run smoke tests
+        run: flutter test
 
       - name: Build release APK
         run: flutter build apk --release

@@ -1,0 +1,18 @@
+# Flutter / Dart build artifacts (everything here is generated locally or in CI)
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Android build leftovers
+android/.gradle/
+android/local.properties
+*.jks
+*.keystore
+key.properties

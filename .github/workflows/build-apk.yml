@@ -1,0 +1,107 @@
+name: Build Ethiopian Dama APK
+
+# Builds the release (and debug) APK automatically on every push.
+# No binary Gradle wrapper needs to be committed: the Android platform
+# shell is generated on the runner with `flutter create .` from the pure
+# Dart sources in this repository (lib/main.dart + pubspec.yaml).
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Release & Debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Show Flutter version
+        run: flutter --version
+
+      # Generate the Android platform files only when they are missing.
+      # `flutter create .` preserves our existing pubspec.yaml and
+      # lib/main.dart and only adds the Android shell (including a fresh
+      # Gradle wrapper, so nothing binary is committed to the repo).
+      - name: Generate Android platform files (if missing)
+        run: |
+          if [ ! -f android/app/build.gradle ] && [ ! -f android/app/build.gradle.kts ]; then
+            echo "android/ missing -> generating with flutter create"
+            flutter create --org com.henok.dama --project-name ethiopian_dama --platforms android .
+          else
+            echo "android/ already present -> skipping flutter create"
+          fi
+          rm -rf test || true
+
+      # The generated release manifest has no network permissions; the
+      # hotspot multiplayer (TCP on 4545) needs them. Also set the Amharic
+      # app label.
+      - name: Patch AndroidManifest (network permissions + Amharic label)
+        run: |
+          python3 - <<'PY'
+          import io
+
+          path = "android/app/src/main/AndroidManifest.xml"
+          with io.open(path, encoding="utf-8") as f:
+              xml = f.read()
+
+          perms = (
+              '<uses-permission android:name="android.permission.INTERNET"/>'
+              '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>'
+              '<uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>'
+          )
+          if "android.permission.INTERNET" not in xml:
+              # Insert before the first <application ...> opening tag.
+              idx = xml.find("<application")
+              if idx == -1:
+                  raise SystemExit("No <application> tag found in manifest!")
+              xml = xml[:idx] + perms + xml[idx:]
+
+          xml = xml.replace(
+              'android:label="ethiopian_dama"',
+              'android:label="የኢትዮጵያ ዳማ Pro"',
+          )
+
+          with io.open(path, "w", encoding="utf-8") as f:
+              f.write(xml)
+          print("Patched:", path)
+          PY
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Build debug APK
+        run: flutter build apk --debug
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ethiopian-dama-pro-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ethiopian-dama-pro-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error

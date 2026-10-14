@@ -90,6 +90,33 @@ jobs:
       - name: Run smoke tests
         run: flutter test
 
+      # Gradle auto-installs the NDK that Flutter's template requires, but a
+      # flaky runner download can corrupt the zip ("unknown archive"). We
+      # pre-install it with retries so the release build is reliable.
+      - name: Pre-install Android NDK (with retries)
+        run: |
+          FLUTTER_ROOT="$(dirname "$(dirname "$(readlink -f "$(which flutter)")")")"
+          NDK_VERSION="$(grep -oP "const ndkVersion = '\K[^']+" \
+            "$FLUTTER_ROOT/packages/flutter_tools/lib/src/android/gradle_utils.dart" || true)"
+          if [ -z "$NDK_VERSION" ]; then
+            NDK_VERSION="28.2.13676358"
+          fi
+          echo "Flutter default NDK: $NDK_VERSION"
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          for i in 1 2 3 4; do
+            echo "sdkmanager install attempt $i..."
+            if yes | "$SDKMANAGER" --install "ndk;${NDK_VERSION}" >/dev/null 2>&1; then
+              echo "NDK $NDK_VERSION installed on attempt $i"
+              break
+            fi
+            echo "attempt $i failed; retrying in 15s"
+            sleep 15
+          done
+          "$SDKMANAGER" --list_installed 2>/dev/null | grep -i "ndk" || true
+
       - name: Build release APK
         run: flutter build apk --release
 
